@@ -15,7 +15,6 @@ jobs:
   build-and-push:
     name: Build base image
     runs-on: ubuntu-latest
-    # don't run from forks
     if: github.repository_owner == 'kemp-zz'
 
     steps:
@@ -49,3 +48,6 @@ jobs:
           workdir: docker
           targets: all
           push: true
+          set: |
+            IMAGE_NAME=${{ env.DOCKER_REPO_NAME }}
+            *.platform=linux/amd64,linux/arm64
