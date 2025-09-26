@@ -32,7 +32,8 @@ FROM $dist_image AS final
 
 ENV PATH="/opt/venv/bin:$PATH"
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git nodejs npm && \
+    apt-get install -y --no-install-recommends \
+    git nodejs npm curl jq net-tools iputils-ping telnet vim wget && \
     npm i pnpm --global
 
 ARG apiserver_port
