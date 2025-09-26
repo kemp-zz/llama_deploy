@@ -9,7 +9,7 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+*"
 
 env:
-  DOCKER_REPO_NAME: fskemp/llama-deploy
+  DOCKER_REPO_NAME: fskemp/llama-deploy:main
 
 jobs:
   build-and-push:
