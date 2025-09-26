@@ -16,7 +16,7 @@ jobs:
     name: Build base image
     runs-on: ubuntu-latest
     # don't run from forks
-    if: github.repository_owner == 'run-llama'
+    if: github.repository_owner == 'kemp-zz'
 
     steps:
       - name: Checkout
