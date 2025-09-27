@@ -1,98 +1,64 @@
-# --------------------------------------------------------------
-# 1️⃣ 参数（可以在 CI / 本地 build 时覆盖）
-# --------------------------------------------------------------
-ARG BUILD_IMAGE=python:3.11-slim
-ARG DIST_IMAGE=python:3.11-slim
+ARG build_image
+ARG dist_image
+ARG uv_image
 
-# llama_deploy 代码版本
-ARG LLAMA_DEPLOY_VERSION=main
-ARG LLAMA_DEPLOY_VERSION_SHA=HEAD
-# 必须使用方括号，才能让 pip 正确识别 extras
-ARG LLAMA_DEPLOY_EXTRAS="[torch,cuda]"   # 若只要 CPU 改成 "[torch,cpu]"
-ARG GIT_CLONE_OPTIONS="--depth 1"
+FROM $uv_image AS uv_image
+FROM $build_image AS build-image
 
-# 端口 / 监控
-ARG APISERVER_PORT=8000
-ARG PROMETHEUS_PORT=9090
-ARG PROMETHEUS_ENABLED="false"
+ARG llama_deploy_version
+ARG llama_deploy_version_sha
+ARG llama_deploy_extras=""
+ARG git_clone_options
 
-# --------------------------------------------------------------
-# 2️⃣ 编译/构建阶段（install system deps + uv + source code）
-# --------------------------------------------------------------
-FROM ${BUILD_IMAGE} AS build-image
-
-# ---- 系统依赖 -------------------------------------------------
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential \
-        git \
-        curl && \
-    rm -rf /var/lib/apt/lists/*
+    build-essential \
+    git
 
-# ---- 安装 uv（仅在构建阶段使用） -----------------------------
-RUN pip install --upgrade pip && \
-    pip install uv
-
-# ---- 拉取源码 -------------------------------------------------
-ARG LLAMA_DEPLOY_VERSION \
-    LLAMA_DEPLOY_VERSION_SHA \
-    GIT_CLONE_OPTIONS
-RUN git clone ${GIT_CLONE_OPTIONS} \
-        --branch=${LLAMA_DEPLOY_VERSION} \
-        https://github.com/kemp-zz/llama_deploy.git \
-        /opt/llama_deploy && \
-    cd /opt/llama_deploy && \
-    git checkout ${LLAMA_DEPLOY_VERSION_SHA}
-
+# Shallow clone the repo, we install from git
+RUN git clone ${git_clone_options} --branch=${llama_deploy_version} https://github.com/run-llama/llama_deploy.git /opt/llama_deploy
 WORKDIR /opt/llama_deploy
+RUN git checkout ${llama_deploy_version_sha}
 
-# ---- 创建 virtualenv -------------------------------------------
+# Use a virtualenv we can copy over the next build stage
 RUN python3 -m venv --system-site-packages /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# ---- 使用 uv 安装项目依赖（包括 torch、cuda 等） ----------
-ARG LLAMA_DEPLOY_EXTRAS
-RUN uv pip install --system --no-cache-dir ".${LLAMA_DEPLOY_EXTRAS}"
-RUN uv pip install --system --no-cache-dir "uvicorn[standard]" fastapi
+# Install llama_deploy
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir ".$llama_deploy_extras"
 
+FROM $dist_image AS final
 
-# --------------------------------------------------------------
-# 3️⃣ 运行时镜像（只保留 venv + 运行时工具）
-# --------------------------------------------------------------
-FROM ${DIST_IMAGE} AS final
-
-# ---- 运行时系统工具 -----------------------------------------
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        git \
-        nodejs npm \
-        curl jq net-tools iputils-ping telnet vim wget && \
-    npm i pnpm --global && \
-    rm -rf /var/lib/apt/lists/*
-
-# ---- 暴露端口 -------------------------------------------------
-ARG APISERVER_PORT PROMETHEUS_PORT PROMETHEUS_ENABLED
-EXPOSE ${APISERVER_PORT}
-EXPOSE ${PROMETHEUS_PORT}
-
-# ---- 把构建好的 virtualenv、启动脚本拷贝进来 -------------
-COPY --from=build-image /opt/venv /opt/venv
-COPY ./run_apiserver.py /opt/
-COPY ./run_autodeploy.py /opt/
-
-# ---- 环境变量（可在 `docker run -e` 覆盖） --------------------
 ENV PATH="/opt/venv/bin:$PATH"
-ENV LLAMA_DEPLOY_APISERVER_RC_PATH=/opt/rc.yaml
-ENV LLAMA_DEPLOY_APISERVER_HOST=0.0.0.0
-ENV LLAMA_DEPLOY_APISERVER_PORT=${APISERVER_PORT}
-ENV LLAMA_DEPLOY_APISERVER_PROMETHEUS_ENABLED=${PROMETHEUS_ENABLED}
-ENV LLAMA_DEPLOY_APISERVER_PROMETHEUS_PORT=${PROMETHEUS_PORT}
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git nodejs npm && \
+    npm i pnpm --global
 
-# --------------------------------------------------------------
-# 4️⃣ 多入口（只跑 API 或 UI+API）
-# --------------------------------------------------------------
+ARG apiserver_port
+ARG rc_path
+ARG prometheus_enabled
+ARG prometheus_port
+
+EXPOSE ${apiserver_port}
+EXPOSE ${prometheus_port}
+
+COPY --from=build-image /opt/venv /opt/venv
+COPY ./run_apiserver.py /opt
+COPY ./run_autodeploy.py /opt
+COPY --from=uv_image /uv /bin/
+
+# Default configuration, override with "docker run -e NAME=value"
+ENV LLAMA_DEPLOY_APISERVER_RC_PATH=${rc_path}
+ENV LLAMA_DEPLOY_APISERVER_HOST=0.0.0.0
+ENV LLAMA_DEPLOY_APISERVER_PORT=${apiserver_port}
+ENV LLAMA_DEPLOY_APISERVER_PROMETHEUS_ENABLED=${prometheus_enabled}
+ENV LLAMA_DEPLOY_APISERVER_PROMETHEUS_PORT=${prometheus_port}
+
 FROM final AS base
-ENTRYPOINT ["python", "/opt/run_apiserver.py"]
+
+ENTRYPOINT [ "python", "/opt/run_apiserver.py" ]
 
 FROM final AS autodeploy
-ENTRYPOINT ["python", "/opt/run_autodeploy.py"]
+
+ENTRYPOINT [ "python", "/opt/run_autodeploy.py" ]
