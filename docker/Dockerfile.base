@@ -10,7 +10,7 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
 # llama_deploy 代码版本
 ARG LLAMA_DEPLOY_VERSION=main          # 分支名或 tag
 ARG LLAMA_DEPLOY_VERSION_SHA=HEAD      # commit SHA，默认 HEAD
-ARG LLAMA_DEPLOY_EXTRAS=""              # 例如 "[torch,cpu]" 或 "[torch,cuda]"
+ARG LLAMA_DEPLOY_EXTRAS="torch,cuda"              # 例如 "[torch,cpu]" 或 "[torch,cuda]"
 ARG GIT_CLONE_OPTIONS="--depth 1"      # 需要时可加 --recurse-submodules
 
 # --------------------------------------------------------------
