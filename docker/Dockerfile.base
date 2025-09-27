@@ -1,33 +1,32 @@
 # --------------------------------------------------------------
-# 1️⃣ 变量声明（可在 build 时覆盖）
+# 参数（可在 CI / 本地 build 时覆盖）
 # --------------------------------------------------------------
-# 基础镜像（CPU 版）
 ARG BUILD_IMAGE=python:3.11-slim
 ARG DIST_IMAGE=python:3.11-slim
-# uv 二进制镜像（官方提供的最小镜像）
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest   # uv 二进制镜像
 
-# llama_deploy 代码版本
-ARG LLAMA_DEPLOY_VERSION=main          # 分支名或 tag
-ARG LLAMA_DEPLOY_VERSION_SHA=HEAD      # commit SHA，默认 HEAD
-ARG LLAMA_DEPLOY_EXTRAS="torch,cuda"              # 例如 "[torch,cpu]" 或 "[torch,cuda]"
-ARG GIT_CLONE_OPTIONS="--depth 1"      # 需要时可加 --recurse-submodules
+ARG LLAMA_DEPLOY_VERSION=main
+ARG LLAMA_DEPLOY_VERSION_SHA=HEAD
+ARG LLAMA_DEPLOY_EXTRAS="[torch,cuda]"    # 必须加方括号
+ARG GIT_CLONE_OPTIONS="--depth 1"
+
+ARG APISERVER_PORT=8000
+ARG PROMETHEUS_PORT=9090
+ARG PROMETHEUS_ENABLED="false"
 
 # --------------------------------------------------------------
-# 2️⃣ uv 镜像（只拷贝 uv 二进制）
+# 1️⃣ uv 镜像（只提供 uv 二进制）
 # --------------------------------------------------------------
 FROM ${UV_IMAGE} AS uv_image
-# uv 镜像本身已经把 /uv 放在根目录，后面会直接 copy /uv -> /bin/uv
 
 # --------------------------------------------------------------
-# 3️⃣ 编译/构建阶段（install system deps + clone repo + pip install)
+# 2️⃣ 编译/构建阶段
 # --------------------------------------------------------------
 FROM ${BUILD_IMAGE} AS build-image
 
-# 让后面的 RUN 能够使用 uv（如果你想改用 pip，只需要把下面两行删掉）
-COPY --from=uv_image /uv /usr/local/bin/uv
+# 把 uv 二进制拷贝进来（后面会再次拷贝到运行镜像）
+COPY --from=uv_image /usr/local/bin/uv /usr/local/bin/uv
 
-# ---- 系统依赖 -------------------------------------------------
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
@@ -49,28 +48,22 @@ RUN git clone ${GIT_CLONE_OPTIONS} \
 WORKDIR /opt/llama_deploy
 
 # ---- 创建 virtualenv -------------------------------------------
-# 使用 --system-site-packages 让后面的运行镜像可以直接复用系统库（如 libstdc++）
 RUN python3 -m venv --system-site-packages /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# ---- 安装 Python 依赖 -----------------------------------------
-# 1) 先升级 pip（uv 会自动使用最新的 pip）
-# 2) 安装 llama_deploy 本身以及可选 extras
+# ---- 安装项目依赖 -----------------------------------------
 ARG LLAMA_DEPLOY_EXTRAS
 RUN pip install --upgrade pip && \
-    # 如果你想使用 uv（更快），可以改成 `uv pip install .${LLAMA_DEPLOY_EXTRAS}`
     pip install --no-cache-dir ".${LLAMA_DEPLOY_EXTRAS}"
 
 # --------------------------------------------------------------
-# 4️⃣ 运行时镜像（仅保留 venv + 运行时工具）
+# 3️⃣ 运行时镜像（仅保留 venv + 运行时工具）
 # --------------------------------------------------------------
 FROM ${DIST_IMAGE} AS final
 
-# 把 uv 再拷贝一次（方便在容器里直接使用 uv 进行后期调试）
-COPY --from=uv_image /uv /usr/local/bin/uv
+# 再把 uv 拷贝一次，方便容器里直接使用 `uv`（可选）
+COPY --from=uv_image /usr/local/bin/uv /usr/local/bin/uv
 
-# ---- 运行时系统工具 -------------------------------------------
-ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         git \
@@ -80,36 +73,31 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # --------------------------------------------------------------
-# 5️⃣ 参数 & 端口（由 docker‑compose / run_*.py 注入）
+# 4️⃣ 端口 & 参数（由 compose / run‑* 脚本注入）
 # --------------------------------------------------------------
-ARG APISERVER_PORT=8000
-ARG PROMETHEUS_PORT=9090
-ARG PROMETHEUS_ENABLED=false
-ARG RC_PATH=/opt/rc.yaml   # 默认 rc 路径，可在 run_*.py 中覆盖
-
+ARG APISERVER_PORT PROMETHEUS_PORT PROMETHEUS_ENABLED
 EXPOSE ${APISERVER_PORT}
 EXPOSE ${PROMETHEUS_PORT}
 
 # --------------------------------------------------------------
-# 6️⃣ 把构建好的 virtualenv、启动脚本、uv 拷贝进来
+# 5️⃣ 把构建好的 venv、启动脚本拷贝进来
 # --------------------------------------------------------------
 COPY --from=build-image /opt/venv /opt/venv
 COPY ./run_apiserver.py /opt/
 COPY ./run_autodeploy.py /opt/
-COPY --from=uv_image /uv /bin/uv   # 兼容旧的 ENTRYPOINT 脚本
 
 # --------------------------------------------------------------
-# 7️⃣ 环境变量（默认值，可在 `docker run -e` 或 compose 中覆盖）
+# 6️⃣ 环境变量（默认值，可在 `docker run -e` 覆盖）
 # --------------------------------------------------------------
 ENV PATH="/opt/venv/bin:$PATH"
-ENV LLAMA_DEPLOY_APISERVER_RC_PATH=${RC_PATH}
+ENV LLAMA_DEPLOY_APISERVER_RC_PATH=/opt/rc.yaml
 ENV LLAMA_DEPLOY_APISERVER_HOST=0.0.0.0
 ENV LLAMA_DEPLOY_APISERVER_PORT=${APISERVER_PORT}
 ENV LLAMA_DEPLOY_APISERVER_PROMETHEUS_ENABLED=${PROMETHEUS_ENABLED}
 ENV LLAMA_DEPLOY_APISERVER_PROMETHEUS_PORT=${PROMETHEUS_PORT}
 
 # --------------------------------------------------------------
-# 8️⃣ 多入口（base = 只跑 API，autodeploy = UI+API）
+# 7️⃣ 多入口（只跑 API 或 UI+API）
 # --------------------------------------------------------------
 FROM final AS base
 ENTRYPOINT ["python", "/opt/run_apiserver.py"]
