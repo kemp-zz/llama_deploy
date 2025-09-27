@@ -53,6 +53,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 # ---- 使用 uv 安装项目依赖（包括 torch、cuda 等） ----------
 ARG LLAMA_DEPLOY_EXTRAS
 RUN uv pip install --system --no-cache-dir ".${LLAMA_DEPLOY_EXTRAS}"
+RUN uv pip install --system --no-cache-dir "uvicorn[standard]" fastapi
+
 
 # --------------------------------------------------------------
 # 3️⃣ 运行时镜像（只保留 venv + 运行时工具）
